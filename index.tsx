@@ -2,11 +2,12 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type, GoogleGenAI as GoogleGenAIType } from '@google/genai';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 // --- SUPABASE CLIENT SETUP ---
 const SUPABASE_URL = 'https://ophlmmpisgizpvgxndkh.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9waGxtbXBpc2dpenB2Z3huZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIxNTcxMDIsImV4cCI6MjA2NzczMzEwMn0.c489RBMwNt_k5cHLVOJX44Ocn7hMgCA_bZkCFJVLxrM';
-const supabase = (window as any).supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase: SupabaseClient = (window as any).supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // --- GEMINI API SETUP ---
 const API_KEY = process.env.API_KEY;
@@ -32,7 +33,7 @@ const getErrorMessage = (error: unknown): string => {
     return stringified === '[object Object]' ? 'An unknown error occurred. Check the console for details.' : stringified;
 };
 const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
-const getDayName = (dateString: string) => new Date(dateString).toLocaleDateString('ar-EG', { weekday: 'long' });
+const getDayName = (dateString:string) => new Date(dateString).toLocaleDateString('ar-EG', { weekday: 'long' });
 const formatTime = (timeString: string) => {
     if (!timeString || !timeString.includes(':')) return 'غير محدد';
     const [hour, minute] = timeString.split(':');
@@ -40,14 +41,24 @@ const formatTime = (timeString: string) => {
     d.setHours(parseInt(hour, 10));
     d.setMinutes(parseInt(minute, 10));
     return d.toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit', hour12: true });
-}
+};
+const uploadFile = async (bucket: string, file: File): Promise<string | null> => {
+    const fileName = `${Date.now()}-${file.name}`;
+    const { error } = await supabase.storage.from(bucket).upload(fileName, file);
+    if (error) {
+        console.error('Error uploading file:', error);
+        return null;
+    }
+    const { data } = supabase.storage.from(bucket).getPublicUrl(fileName);
+    return data.publicUrl;
+};
 
 // --- TYPES AND INTERFACES ---
 type Page = 'auth' | 'dashboard' | 'profile' | 'gallery' | 'teachers' | 'about' | 'trips' | 'legal' | 'admin' | 'stats' | 'schedule' | 'books' | 'exams' | 'instructions';
 type AuthPage = 'login' | 'register' | 'forgot_password';
 type ToastType = 'success' | 'error' | 'info';
 type Theme = 'light' | 'dark' | 'pink';
-type AdminSection = 'classes' | 'teachers' | 'posts' | 'students' | 'trips' | 'gallery' | 'bookings';
+type AdminSection = 'classes' | 'teachers' | 'posts' | 'students' | 'trips' | 'gallery' | 'bookings' | 'books';
 type AdminModalMode = 'add' | 'edit';
 
 interface User {
@@ -61,13 +72,15 @@ interface User {
     grade: string;
     role?: 'student' | 'admin' | 'supervisor';
     created_at?: string;
+    avatar_url?: string;
 }
 
-interface ClassInfo { id: number; name: string; teacher: string; grade: string; date: string; time: string; location: string; image_url?: string; }
+interface ClassInfo { id: number; name: string; teacher: string; grade: string; date: string; time: string; location: string; image_url?: string; description: string; is_review: boolean; is_bookable: boolean; }
 interface TripInfo { id: number; name: string; place: string; date: string; time: string; description: string; image_urls: string[]; price: number; available_spots: number; }
 interface Post { id: number; title: string; content: string; image_url?: string; created_at: string; }
 interface Teacher { id: number; name: string; subject: string; image_url: string; phone?: string; }
 interface GalleryImage { id: number; image_url: string; description: string; }
+interface BookInfo { id: number; title: string; description: string; image_url: string; download_url: string; }
 interface Booking {
     id: number;
     student_id: string;
@@ -78,6 +91,9 @@ interface Booking {
     item_date: string;
     item_time: string;
     item_location?: string;
+    profiles: { full_name: string; student_id: string };
+    classes: { name: string; date: string; time: string; location: string } | null;
+    trips: { name: string; date: string; time: string; place: string } | null;
 }
 interface ChatMessage {
     sender: 'user' | 'ai';
@@ -100,64 +116,20 @@ interface ExamResults {
 }
 interface Notification {
   id: number;
+  user_id: string;
   text: string;
-  time: string;
+  created_at: string;
   read: boolean;
   icon: string;
 }
 
-type AdminEditableItem = Teacher | TripInfo | GalleryImage | ClassInfo | Post;
+type AdminEditableItem = Teacher | TripInfo | GalleryImage | ClassInfo | Post | BookInfo;
 interface AdminModalState {
     isOpen: boolean;
     mode: AdminModalMode;
     section: AdminSection | null;
     item: AdminEditableItem | null;
 }
-
-
-// --- PLACEHOLDER DATA (For Demo Mode Only) ---
-const placeholderAdmin: User = { id: 'admin-id', student_id: 'GC-ADMIN-001', full_name: 'المدير العام', email: 'admin@google.com', phone: '01011111111', guardian_phone: '', school: 'الإدارة', grade: 'المدير', role: 'admin' };
-const placeholderSupervisor: User = { id: 'supervisor-id', student_id: 'GC-SUPER-001', full_name: 'المشرف', email: 'supervisor@google.com', phone: '01022222222', guardian_phone: '', school: 'الإشراف', grade: 'المشرف', role: 'supervisor' };
-const placeholderStudent: User = { id: 'demo-id-1', student_id: 'GC-DEMO-24015', full_name: 'عبدالرحمن محمد', email: 'demo@example.com', phone: '01012345678', guardian_phone: '01222222222', school: 'مدرسة المستقبل', grade: 'الصف الثالث الثانوي', role: 'student', created_at: '2024-01-10T10:00:00Z' };
-
-const placeholderStudents: User[] = [
-    placeholderStudent,
-    { id: 'demo-id-2', student_id: 'GC-DEMO-24016', full_name: 'فاطمة الزهراء', email: 'fatima@example.com', phone: '01123456789', guardian_phone: '01234567890', school: 'مدرسة النور', grade: 'الصف الثاني الثانوي', role: 'student', created_at: '2024-02-15T11:00:00Z' },
-    { id: 'demo-id-3', student_id: 'GC-DEMO-24017', full_name: 'علي حسن', email: 'ali@example.com', phone: '01555555555', guardian_phone: '01111111111', school: 'مدرسة التفوق', grade: 'الصف الأول الثانوي', role: 'student', created_at: '2024-03-20T12:00:00Z' },
-    { id: 'demo-id-4', student_id: 'GC-DEMO-24018', full_name: 'مريم أحمد', email: 'mariam@example.com', phone: '01098765432', guardian_phone: '01198765432', school: 'مدرسة الأفق', grade: 'الصف الثالث الثانوي', role: 'student', created_at: '2024-04-01T09:00:00Z' },
-
-];
-
-const today = new Date();
-const todayISO = today.toISOString().split('T')[0];
-const getFutureDateISO = (days: number) => {
-    const d = new Date();
-    d.setDate(today.getDate() + days);
-    return d.toISOString().split('T')[0];
-};
-
-const placeholderClasses: ClassInfo[] = [
-    { id: 1, name: 'الفيزياء الحديثة', teacher: 'أ. أحمد المصري', grade: 'الصف الثالث الثانوي', date: todayISO, time: '14:00', location: 'قاعة 1', image_url: 'https://images.unsplash.com/photo-1532187643623-8f6a72070348?q=80&w=800' },
-    { id: 2, name: 'الكيمياء العضوية', teacher: 'أ. سارة عبدالحميد', grade: 'الصف الثالث الثانوي', date: todayISO, time: '16:00', location: 'قاعة 2', image_url: 'https://images.unsplash.com/photo-1554475901-4538ddfbccc2?q=80&w=800' },
-    { id: 3, name: 'اللغة الإنجليزية (متقدم)', teacher: 'أ. مارك جونسون', grade: 'الصف الثاني الثانوي', date: todayISO, time: '18:00', location: 'المعمل اللغوي', image_url: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?q=80&w=800' },
-    { id: 4, name: 'الرياضيات (جبر)', teacher: 'أ. هند إبراهيم', grade: 'الصف الأول الثانوي', date: getFutureDateISO(1), time: '15:00', location: 'قاعة 3' },
-    { id: 5, name: 'الأحياء (وراثة)', teacher: 'أ. خالد السيد', grade: 'الصف الثالث الثانوي', date: getFutureDateISO(1), time: '17:00', location: 'المعمل' },
-    { id: 6, name: 'اللغة العربية (بلاغة)', teacher: 'أ. شيماء قاسم', grade: 'الصف الثاني الثانوي', date: getFutureDateISO(2), time: '16:00', location: 'قاعة 4' },
-    { id: 7, name: 'التاريخ الحديث', teacher: 'أ. محمد فتحي', grade: 'الصف الأول الثانوي', date: getFutureDateISO(2), time: '14:00', location: 'قاعة 1' },
-    { id: 8, name: 'الجغرافيا السياسية', teacher: 'أ. محمد فتحي', grade: 'الصف الثالث الثانوي', date: getFutureDateISO(3), time: '14:00', location: 'قاعة 1' },
-    { id: 9, name: 'الفلسفة والمنطق', teacher: 'أ. شيماء قاسم', grade: 'الصف الثالث الثانوي', date: getFutureDateISO(4), time: '16:00', location: 'قاعة 4' },
-];
-const placeholderTrips: TripInfo[] = [ { id: 1, name: 'رحلة إلى مكتبة الإسكندرية', place: 'الإسكندرية', date: getFutureDateISO(7), time: '08:00', description: 'رحلة تعليمية وثقافية لاستكشاف صرح من أعظم صروح المعرفة في العالم.', image_urls: ['https://images.unsplash.com/photo-1596773328403-9512341498b3?q=80&w=800'], price: 250, available_spots: 50 }, { id: 2, name: 'زيارة المتحف المصري الكبير', place: 'الجيزة', date: getFutureDateISO(14), time: '09:00', description: 'شاهد كنوز الحضارة المصرية القديمة في أكبر متحف في العالم.', image_urls: ['https://images.unsplash.com/photo-1582374558066-6b15a15b3996?q=80&w=800', 'https://images.unsplash.com/photo-16142DE219468594229353651147?q=80&w=800'], price: 300, available_spots: 40 }, ];
-const placeholderPosts: Post[] = [ { id: 1, title: 'فتح باب الحجز لمجموعات التقوية', content: 'تم فتح باب الحجز لمجموعات التقوية الجديدة للصفوف الأول والثاني والثالث الثانوي. سارع بالحجز فالأماكن محدودة.', created_at: new Date().toISOString(), image_url: 'https://images.unsplash.com/photo-1580582932707-520aed937b7b?q=80&w=800' }, { id: 2, title: 'جدول الامتحانات التجريبية', content: 'يرجى العلم بأن الامتحانات التجريبية ستبدأ الأسبوع القادم. يمكنكم الاطلاع على الجدول من قسم "الكتب والمذكرات".', created_at: new Date(Date.now() - 86400000 * 2).toISOString() }, ];
-const placeholderTeachers: Teacher[] = [ { id: 1, name: 'أ. أحمد المصري', subject: 'الفيزياء', image_url: 'https://randomuser.me/api/portraits/men/32.jpg', phone: '01010101010' }, { id: 2, name: 'أ. سارة عبدالحميد', subject: 'الكيمياء', image_url: 'https://randomuser.me/api/portraits/women/44.jpg' }, { id: 3, name: 'أ. مارك جونسون', subject: 'اللغة الإنجليزية', image_url: 'https://randomuser.me/api/portraits/men/34.jpg', phone: '01212121212' }, { id: 4, name: 'أ. هند إبراهيم', subject: 'الرياضيات', image_url: 'https://randomuser.me/api/portraits/women/45.jpg' }, { id: 5, name: 'أ. خالد السيد', subject: 'الأحياء', image_url: 'https://randomuser.me/api/portraits/men/36.jpg' }, { id: 6, name: 'أ. شيماء قاسم', subject: 'اللغة العربية والفلسفة', image_url: 'https://randomuser.me/api/portraits/women/46.jpg' }, { id: 7, name: 'أ. محمد فتحي', subject: 'التاريخ والجغرافيا', image_url: 'https://randomuser.me/api/portraits/men/37.jpg', phone: '01515151515' }, ];
-const placeholderGallery: GalleryImage[] = [ { id: 1, image_url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=800', description: 'يوم التكريم للطلاب المتفوقين' }, { id: 2, image_url: 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=800', description: 'أثناء أحد الأنشطة العملية' }, { id: 3, image_url: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?q=80&w=800', description: 'مجموعة من الطلاب في محاضرة' }, { id: 4, image_url: 'https://images.unsplash.com/photo-1524178232363-1fb2b075b655?q=80&w=800', description: 'مناقشة علمية بين الطلاب والمدرس' }, { id: 5, image_url: 'https://images.unsplash.com/photo-1571260899204-42aed4c202e0?q=80&w=800', description: 'صورة جماعية في نهاية العام الدراسي' }, { id: 6, image_url: 'https://images.unsplash.com/photo-1606761568499-6d2451b23c66?q=80&w=800', description: 'مكتبة المركز' }, ];
-const placeholderBookings: Booking[] = [ {id: 1, student_id: 'GC-DEMO-24015', student_name: 'عبدالرحمن محمد', type: 'class', item_id: 1, item_name: 'الفيزياء الحديثة', item_date: todayISO, item_time: '14:00', item_location: 'قاعة 1'}, {id: 2, student_id: 'GC-DEMO-24015', student_name: 'عبدالرحمن محمد', type: 'class', item_id: 5, item_name: 'الأحياء (وراثة)', item_date: getFutureDateISO(1), item_time: '17:00', item_location: 'المعمل'}, {id: 3, student_id: 'GC-DEMO-24016', student_name: 'فاطمة الزهراء', type: 'class', item_id: 2, item_name: 'الكيمياء العضوية', item_date: todayISO, item_time: '16:00', item_location: 'قاعة 2'}, {id: 4, student_id: 'GC-DEMO-24016', student_name: 'فاطمة الزهراء', type: 'trip', item_id: 1, item_name: 'رحلة إلى مكتبة الإسكندرية', item_date: getFutureDateISO(7), item_time: '08:00', item_location: 'الإسكندرية'}, {id: 5, student_id: 'GC-DEMO-24017', student_name: 'علي حسن', type: 'class', item_id: 4, item_name: 'الرياضيات (جبر)', item_date: getFutureDateISO(1), item_time: '15:00', item_location: 'قاعة 3'}, {id: 6, student_id: 'GC-DEMO-24015', student_name: 'عبدالرحمن محمد', type: 'trip', item_id: 2, item_name: 'زيارة المتحف المصري الكبير', item_date: getFutureDateISO(14), item_time: '09:00', item_location: 'الجيزة'}, {id: 7, student_id: 'GC-DEMO-24018', student_name: 'مريم أحمد', type: 'class', item_id: 1, item_name: 'الفيزياء الحديثة', item_date: todayISO, item_time: '14:00', item_location: 'قاعة 1'}, {id: 8, student_id: 'GC-DEMO-24018', student_name: 'مريم أحمد', type: 'class', item_id: 9, item_name: 'الفلسفة والمنطق', item_date: getFutureDateISO(4), item_time: '16:00', item_location: 'قاعة 4'}, ];
-const placeholderNotifications: Notification[] = [
-    { id: 1, text: 'تم تأكيد حجزك في حصة الفيزياء الحديثة.', time: 'منذ 5 دقائق', read: false, icon: '✅' },
-    { id: 2, text: 'لا تنسَ امتحان الكيمياء التجريبي غداً الساعة 3 عصراً.', time: 'منذ ساعة', read: false, icon: '🧪' },
-    { id: 3, text: 'تم إضافة مذكرة جديدة في مادة الأحياء.', time: 'منذ 3 ساعات', read: true, icon: '📚' },
-    { id: 4, text: 'رسالة من أ. أحمد المصري: "الرجاء مراجعة الفصل الثالث جيداً."', time: 'أمس', read: true, icon: '💬' },
-];
 
 // --- REACT COMPONENTS ---
 
@@ -169,7 +141,7 @@ interface ToastProps {
 }
 const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
     useEffect(() => {
-        const timer = setTimeout(onClose, 4000);
+        const timer = setTimeout(onClose, 5000);
         return () => clearTimeout(timer);
     }, [onClose]);
 
@@ -229,17 +201,26 @@ interface DailyClassTickerProps {
 }
 const DailyClassTicker: React.FC<DailyClassTickerProps> = ({ classes, onClassClick }) => {
     const tickerRef = useRef<HTMLDivElement>(null);
+    const todayISO = new Date().toISOString().split('T')[0];
+    const todayClasses = useMemo(() => classes.filter(c => c.date === todayISO).sort((a,b) => a.time.localeCompare(b.time)), [classes, todayISO]);
 
     useEffect(() => {
         const ticker = tickerRef.current;
-        if (!ticker || ticker.children.length <= 1) return;
+        if (!ticker || todayClasses.length <= 1) return;
 
         const clone = ticker.cloneNode(true);
         (clone as HTMLElement).setAttribute('aria-hidden', 'true');
-        ticker.parentElement?.appendChild(clone);
-    }, [classes]);
+        if (ticker.parentElement) {
+           ticker.parentElement.appendChild(clone);
+        }
+        return () => {
+            if (clone.parentElement) {
+                clone.parentElement.removeChild(clone);
+            }
+        };
+    }, [todayClasses]);
 
-    if (classes.length === 0) {
+    if (todayClasses.length === 0) {
         return (
             <div className="daily-ticker-bar">
                 <div className="ticker-icon">🗓️</div>
@@ -252,8 +233,8 @@ const DailyClassTicker: React.FC<DailyClassTickerProps> = ({ classes, onClassCli
         <div className="daily-ticker-bar">
              <div className="ticker-icon">✨</div>
             <div className="ticker-wrapper-vertical">
-                <div ref={tickerRef} className="ticker-content-vertical">
-                    {classes.map(c => (
+                <div ref={tickerRef} className="ticker-content-vertical" style={{animationDuration: `${todayClasses.length * 10}s`}}>
+                    {todayClasses.map(c => (
                         <div key={c.id} className="ticker-item-vertical" onClick={() => onClassClick(c)}>
                             <span><strong>{c.name}</strong> - {c.teacher}</span>
                             <span>{formatTime(c.time)} - {c.location}</span>
@@ -272,6 +253,7 @@ interface WeeklyScheduleGridProps {
 }
 const WeeklyScheduleGrid: React.FC<WeeklyScheduleGridProps> = ({ classes, onClassClick }) => {
     const weeklyClasses = useMemo(() => {
+        const todayISO = new Date().toISOString().split('T')[0];
         const upcoming = classes.filter(c => new Date(c.date) >= new Date(todayISO));
         const groupedByDay = upcoming.reduce((acc, curr) => {
             if (curr.date === todayISO) return acc; 
@@ -281,7 +263,7 @@ const WeeklyScheduleGrid: React.FC<WeeklyScheduleGridProps> = ({ classes, onClas
             return acc;
         }, {} as Record<string, ClassInfo[]>);
 
-        return Object.entries(groupedByDay).sort(([dateA], [dateB]) => new Date(dateA).getTime() - new Date(dateB).getTime());
+        return Object.entries(groupedByDay).sort(([dateA], [dateB]) => new Date(dateA).getTime() - new Date(dateB).getTime()).slice(0, 7);
     }, [classes]);
 
     if (weeklyClasses.length === 0) {
@@ -320,8 +302,9 @@ interface ClassPopupProps {
     isOpen: boolean;
     classInfo: ClassInfo | null;
     onClose: () => void;
+    onBook: (classInfo: ClassInfo) => void;
 }
-const ClassPopup: React.FC<ClassPopupProps> = ({ isOpen, classInfo, onClose }) => {
+const ClassPopup: React.FC<ClassPopupProps> = ({ isOpen, classInfo, onClose, onBook }) => {
     if (!isOpen || !classInfo) return null;
 
     return (
@@ -332,11 +315,54 @@ const ClassPopup: React.FC<ClassPopupProps> = ({ isOpen, classInfo, onClose }) =
                     <button onClick={onClose} className="close-btn">&times;</button>
                 </div>
                 <div className="modal-body">
+                    {classInfo.is_review && <div className="review-badge-popup">مراجعة</div>}
                     <h2>{classInfo.name}</h2>
                     <p><strong>المدرس:</strong> {classInfo.teacher}</p>
                     <p><strong>الصف:</strong> {classInfo.grade}</p>
                     <p><strong>الموعد:</strong> {formatDate(classInfo.date)} الساعة {formatTime(classInfo.time)}</p>
                     <p><strong>المكان:</strong> {classInfo.location}</p>
+                    <p><strong>الوصف:</strong> {classInfo.description || 'لا يوجد وصف متاح.'}</p>
+                </div>
+                {classInfo.is_bookable && (
+                    <div className="modal-footer">
+                        <button onClick={onClose} className="btn btn-secondary">إغلاق</button>
+                        <button onClick={() => onBook(classInfo)} className="btn btn-primary">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                            <span>تأكيد الحجز</span>
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- Teacher Popup Component ---
+interface TeacherPopupProps {
+    isOpen: boolean;
+    teacherInfo: Teacher | null;
+    onClose: () => void;
+}
+const TeacherPopup: React.FC<TeacherPopupProps> = ({ isOpen, teacherInfo, onClose }) => {
+    if (!isOpen || !teacherInfo) return null;
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal-container teacher-detail-modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                    <h3>تفاصيل المدرس</h3>
+                    <button onClick={onClose} className="close-btn">&times;</button>
+                </div>
+                <div className="modal-body">
+                    <img src={teacherInfo.image_url} alt={teacherInfo.name} className="teacher-detail-image" />
+                    <h2>{teacherInfo.name}</h2>
+                    <p className="teacher-detail-subject">{teacherInfo.subject}</p>
+                    {teacherInfo.phone && (
+                        <p className="teacher-detail-phone">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                            <span>{teacherInfo.phone}</span>
+                        </p>
+                    )}
                 </div>
             </div>
         </div>
@@ -344,8 +370,11 @@ const ClassPopup: React.FC<ClassPopupProps> = ({ isOpen, classInfo, onClose }) =
 };
 
 // --- Initial Avatar Component ---
-interface InitialAvatarProps { name: string; className?: string; }
-const InitialAvatar: React.FC<InitialAvatarProps> = ({ name, className = '' }) => {
+interface InitialAvatarProps { name: string; avatarUrl?: string | null; className?: string; }
+const InitialAvatar: React.FC<InitialAvatarProps> = ({ name, avatarUrl, className = '' }) => {
+    if (avatarUrl) {
+        return <img src={avatarUrl} alt={name} className={`profile-initial-avatar ${className}`} style={{objectFit: 'cover'}} />;
+    }
     const initial = name ? name.trim().charAt(0).toUpperCase() : '?';
     return <div className={`profile-initial-avatar ${className}`}>{initial}</div>;
 };
@@ -428,19 +457,12 @@ interface NotificationsPanelProps {
   isOpen: boolean;
   onClose: () => void;
   notifications: Notification[];
-  setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
+  onMarkAllRead: () => void;
+  onMarkOneRead: (id: number) => void;
 }
 
-const NotificationsPanel: React.FC<NotificationsPanelProps> = ({ isOpen, onClose, notifications, setNotifications }) => {
+const NotificationsPanel: React.FC<NotificationsPanelProps> = ({ isOpen, onClose, notifications, onMarkAllRead, onMarkOneRead }) => {
   const panelRef = useRef<HTMLDivElement>(null);
-
-  const handleMarkAllAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  };
-
-  const handleMarkOneAsRead = (id: number) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -467,18 +489,18 @@ const NotificationsPanel: React.FC<NotificationsPanelProps> = ({ isOpen, onClose
     <div className="notifications-panel" ref={panelRef}>
       <div className="notifications-header">
         <h3>الإشعارات {unreadCount > 0 && `(${unreadCount})`}</h3>
-        <button onClick={handleMarkAllAsRead} disabled={unreadCount === 0}>
+        <button onClick={onMarkAllRead} disabled={unreadCount === 0}>
           تحديد الكل كمقروء
         </button>
       </div>
       <div className="notifications-list">
         {notifications.length > 0 ? (
           notifications.map(n => (
-            <div key={n.id} className={`notification-item ${n.read ? 'read' : ''}`} onClick={() => handleMarkOneAsRead(n.id)}>
+            <div key={n.id} className={`notification-item ${n.read ? 'read' : ''}`} onClick={() => onMarkOneRead(n.id)}>
               <div className="notification-icon">{n.icon}</div>
               <div className="notification-content">
                 <p>{n.text}</p>
-                <small>{n.time}</small>
+                <small>{new Date(n.created_at).toLocaleString('ar-EG')}</small>
               </div>
             </div>
           ))
@@ -487,11 +509,6 @@ const NotificationsPanel: React.FC<NotificationsPanelProps> = ({ isOpen, onClose
             <p>لا توجد إشعارات حالياً</p>
           </div>
         )}
-      </div>
-      <div className="notifications-footer">
-        <a href="#" onClick={(e) => { e.preventDefault(); alert('صفحة جميع الإشعارات قيد التطوير.'); }}>
-          عرض جميع الإشعارات
-        </a>
       </div>
     </div>
   );
@@ -512,16 +529,17 @@ const App = () => {
     const [teachers, setTeachers] = useState<Teacher[]>([]);
     const [posts, setPosts] = useState<Post[]>([]);
     const [gallery, setGallery] = useState<GalleryImage[]>([]);
+    const [books, setBooks] = useState<BookInfo[]>([]);
     const [bookings, setBookings] = useState<Booking[]>([]);
     const [students, setStudents] = useState<User[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
-
 
     // UI states
     const [isSidebarOpen, setSidebarOpen] = useState(false);
     const [isNotificationsOpen, setNotificationsOpen] = useState(false);
     const [classPopup, setClassPopup] = useState<{ isOpen: boolean; classInfo: ClassInfo | null }>({ isOpen: false, classInfo: null });
-    const [adminSection, setAdminSection] = useState<AdminSection>('teachers');
+    const [teacherPopup, setTeacherPopup] = useState<{ isOpen: boolean; teacherInfo: Teacher | null }>({ isOpen: false, teacherInfo: null });
+    const [adminSection, setAdminSection] = useState<AdminSection>('students');
     const [toast, setToast] = useState<{ message: string; type: ToastType; id: number } | null>(null);
     const [adminModalState, setAdminModalState] = useState<AdminModalState>({ isOpen: false, mode: 'add', section: null, item: null });
     const [confirmationModal, setConfirmationModal] = useState<{
@@ -547,55 +565,147 @@ const App = () => {
         { sender: 'ai', text: 'مرحباً! أنا مساعدك الذكي في مركز جوجل. كيف يمكنني مساعدتك اليوم؟ يمكنك أن تسألني عن مواعيد الحصص، الرحلات، أو أي معلومات أخرى تخص المركز.' }
     ]);
 
-
     // --- EFFECTS ---
+    const showToast = useCallback((message: string, type: ToastType = 'info') => {
+        setToast({ message, type, id: Date.now() });
+    }, []);
+
+    const fetchAllData = useCallback(async (currentUser: User) => {
+      setIsLoading(true);
+      try {
+          const tableFetch = (tableName: string) => supabase.from(tableName).select('*').order('created_at', { ascending: false });
+          
+          let classQuery = supabase.from('classes').select('*');
+          if (currentUser.role === 'student') {
+              classQuery = classQuery.eq('grade', currentUser.grade);
+          }
+
+          const [
+              classRes, tripRes, teacherRes, postRes, galleryRes, bookRes, 
+              bookingRes, studentRes, notificationRes
+          ] = await Promise.all([
+              classQuery.order('date', { ascending: true }).order('time', { ascending: true }),
+              tableFetch('trips'),
+              tableFetch('teachers'),
+              tableFetch('posts'),
+              tableFetch('gallery'),
+              tableFetch('books'),
+              supabase.from('bookings_details').select('*').order('item_date', { ascending: false }), // Using the view for details
+              supabase.from('profiles').select('*').neq('role', 'admin'),
+              supabase.from('notifications').select('*').eq('user_id', currentUser.id).order('created_at', { ascending: false })
+          ]);
+  
+          if (classRes.data) setClasses(classRes.data);
+          if (tripRes.data) setTrips(tripRes.data);
+          if (teacherRes.data) setTeachers(teacherRes.data);
+          if (postRes.data) setPosts(postRes.data);
+          if (galleryRes.data) setGallery(galleryRes.data);
+          if (bookRes.data) setBooks(bookRes.data);
+          if (bookingRes.data) setBookings(bookingRes.data as any);
+          if (studentRes.data) setStudents(studentRes.data);
+          if (notificationRes.data) setNotifications(notificationRes.data);
+
+      } catch (error) {
+          showToast(`خطأ في تحميل البيانات: ${getErrorMessage(error)}`, 'error');
+      } finally {
+        setIsLoading(false);
+      }
+  }, [showToast]);
+
+
     useEffect(() => {
-        // Load theme from storage
         const savedTheme = localStorage.getItem('gc-theme') as Theme | null;
         if (savedTheme) setTheme(savedTheme);
 
-        // Load placeholder data
-        setClasses(placeholderClasses);
-        setTrips(placeholderTrips);
-        setTeachers(placeholderTeachers);
-        setPosts(placeholderPosts);
-        setGallery(placeholderGallery);
-        setBookings(placeholderBookings);
-        setStudents(placeholderStudents);
-        setNotifications(placeholderNotifications);
-        
-        // Check for user session
-        let loadingTime = 1500;
-        const savedUserJSON = localStorage.getItem('gc-user');
-        if (savedUserJSON) {
+        const fetchInitialSession = async () => {
             try {
-                const user_from_storage = JSON.parse(savedUserJSON);
-                setUser(user_from_storage);
-                setPage('dashboard');
-                loadingTime = 500; // Shorter loading time if session is found
+                const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+                if (sessionError) throw sessionError;
+
+                if (session?.user) {
+                    const { data: profile, error: profileError } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+                    if (profileError) throw profileError;
+
+                    if (profile) {
+                        const userData: User = { ...profile, email: session.user.email! };
+                        setUser(userData);
+                        setPage('dashboard');
+                        fetchAllData(userData); // Don't await, let UI render first
+                    } else {
+                        // Profile doesn't exist for a logged-in user, sign them out.
+                        await supabase.auth.signOut();
+                        setUser(null);
+                        setPage('auth');
+                    }
+                } else {
+                    setPage('auth');
+                }
             } catch (error) {
-                console.error("Failed to parse user from storage", error);
-                localStorage.removeItem('gc-user');
+                console.error("Error during initial session fetch:", getErrorMessage(error));
+                showToast(`حدث خطأ أثناء تحميل الجلسة: ${getErrorMessage(error)}`, 'error');
+                setPage('auth'); // Fallback to login page
+            } finally {
+                setIsLoading(false); // Crucial part: always remove the main loader
             }
-        }
+        };
         
-        const timer = setTimeout(() => setIsLoading(false), loadingTime);
-        return () => clearTimeout(timer);
-    }, []);
+        fetchInitialSession();
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            if (session?.user) {
+                 const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+                 if (profile) {
+                    const userData: User = { ...profile, email: session.user.email! };
+                    setUser(userData);
+                    setPage('dashboard');
+                    if (_event === 'SIGNED_IN') {
+                      fetchAllData(userData); // Don't await here either
+                    }
+                } else {
+                   await supabase.auth.signOut();
+                }
+            } else {
+                setUser(null);
+                setPage('auth');
+            }
+        });
+
+        return () => subscription.unsubscribe();
+    }, [fetchAllData, showToast]);
+
+    // Real-time notifications subscription
+    useEffect(() => {
+        if (!user) return;
+
+        const channel = supabase
+            .channel(`notifications:${user.id}`)
+            .on('postgres_changes', {
+                event: 'INSERT',
+                schema: 'public',
+                table: 'notifications',
+                filter: `user_id=eq.${user.id}`
+            }, (payload) => {
+                const newNotification = payload.new as Notification;
+                setNotifications(prev => [newNotification, ...prev]);
+                showToast(newNotification.text, 'info');
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [user, showToast]);
+
 
     useEffect(() => {
         document.body.setAttribute('data-theme', theme);
         localStorage.setItem('gc-theme', theme);
     }, [theme]);
 
-    // Routing effect
     useEffect(() => {
-        const privatePages: Page[] = ['dashboard', 'profile', 'admin', 'stats', 'teachers', 'gallery', 'trips', 'schedule', 'books', 'exams'];
-        // If not logged in and trying to access a private page, redirect to auth
-        if (!user && privatePages.includes(page)) {
+        if (!user && page !== 'auth') {
             setPage('auth');
         }
-        // If logged in and on auth page, redirect to dashboard
         if (user && page === 'auth') {
             setPage('dashboard');
         }
@@ -603,67 +713,159 @@ const App = () => {
 
 
     // --- EVENT HANDLERS & HELPERS ---
-    const showToast = (message: string, type: ToastType = 'info') => {
-        setToast({ message, type, id: Date.now() });
-    };
-
-    const handleLogin = (loggedInUser: User) => {
-        setUser(loggedInUser);
-        setPage('dashboard');
-        localStorage.setItem('gc-user', JSON.stringify(loggedInUser));
-    };
-
-    const handleLogout = () => {
-        localStorage.removeItem('gc-user');
-        setUser(null);
-        setPage('auth');
+    const handleLogout = async () => {
+        closeConfirmationModal();
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+            showToast(getErrorMessage(error), 'error');
+        }
+        // onAuthStateChange will handle state reset
         setSidebarOpen(false);
         setNotificationsOpen(false);
-        closeConfirmationModal();
     };
     
-    const handleUpdateUser = (updatedUser: User) => {
-        setUser(updatedUser);
-        localStorage.setItem('gc-user', JSON.stringify(updatedUser)); // Update session storage as well
-        showToast('تم تحديث بياناتك بنجاح!', 'success');
-        // In a real app, this would be where you call Supabase to update the database
+    const handleUpdateUser = async (updatedProfileData: Partial<User>, avatarFile?: File) => {
+        if (!user) return;
+        setIsLoading(true);
+        try {
+            let avatar_url = user.avatar_url;
+
+            if (avatarFile) {
+                // Path must match RLS policy: {user_id}/{file_name}
+                const fileName = `${user.id}/${Date.now()}-${avatarFile.name}`;
+
+                // Remove old avatar to prevent orphans, if it exists
+                if (user.avatar_url) {
+                    try {
+                        const oldPath = new URL(user.avatar_url).pathname.split('/avatars/')[1];
+                        if (oldPath) {
+                            await supabase.storage.from('avatars').remove([oldPath]);
+                        }
+                    } catch (e) {
+                        console.error("Could not remove old avatar:", e);
+                    }
+                }
+
+                const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, avatarFile, {
+                    cacheControl: '3600',
+                    upsert: true // Use upsert to handle replacement gracefully
+                });
+
+                if (uploadError) throw uploadError;
+
+                const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(fileName);
+                if (urlData.publicUrl) {
+                    avatar_url = urlData.publicUrl;
+                } else {
+                    throw new Error("فشل الحصول على رابط الصورة بعد الرفع.");
+                }
+            }
+            
+            const dataToUpdate = {
+                full_name: updatedProfileData.full_name,
+                phone: updatedProfileData.phone,
+                guardian_phone: updatedProfileData.guardian_phone,
+                school: updatedProfileData.school,
+                avatar_url: avatar_url
+            };
+
+            const { data, error } = await supabase
+                .from('profiles')
+                .update(dataToUpdate)
+                .eq('id', user.id)
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            setUser(prev => prev ? { ...prev, ...data } : null);
+            showToast('تم تحديث بياناتك بنجاح!', 'success');
+
+        } catch (error) {
+            showToast(`خطأ في تحديث البيانات: ${getErrorMessage(error)}`, 'error');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
+
+    const handleBooking = async (item: ClassInfo | TripInfo, type: 'class' | 'trip') => {
+        if (!user) {
+            showToast('يجب تسجيل الدخول أولاً للقيام بالحجز', 'error');
+            return;
+        }
+
+        try {
+            // Check if already booked
+            const { data: existingBooking, error: checkError } = await supabase.from('bookings')
+                .select('id')
+                .eq('student_id', user.id)
+                .eq('item_id', item.id)
+                .eq('type', type)
+                .maybeSingle();
+
+            if (checkError) throw checkError;
+            if (existingBooking) {
+                showToast('لقد قمت بحجز هذا بالفعل!', 'info');
+                return;
+            }
+
+            const { error: bookingError } = await supabase.from('bookings').insert({
+                student_id: user.id,
+                item_id: item.id,
+                type: type,
+            });
+
+            if (bookingError) throw bookingError;
+            
+            // Create a notification
+            const notifText = `تم تأكيد حجزك في ${type === 'class' ? 'حصة' : 'رحلة'} "${item.name}".`;
+            const { error: notifError } = await supabase.from('notifications').insert({
+                user_id: user.id,
+                text: notifText,
+                icon: '✅'
+            });
+
+            if (notifError) {
+                console.error("Could not create notification:", getErrorMessage(notifError));
+            }
+
+            showToast(`تم حجز "${item.name}" بنجاح!`, 'success');
+            if (user) await fetchAllData(user);
+        
+        } catch(error) {
+            showToast(`فشل الحجز: ${getErrorMessage(error)}`, 'error');
+        } finally {
+            setClassPopup({isOpen: false, classInfo: null});
+        }
+    };
+    
     const navigate = (targetPage: Page) => {
         setPage(targetPage);
         setSidebarOpen(false);
         setNotificationsOpen(false);
     };
 
-    const handleClassClick = (classInfo: ClassInfo) => {
-        setClassPopup({ isOpen: true, classInfo });
-    };
+    const handleClassClick = (classInfo: ClassInfo) => setClassPopup({ isOpen: true, classInfo });
+    const handleTeacherClick = (teacherInfo: Teacher) => setTeacherPopup({ isOpen: true, teacherInfo });
     
     // --- CONFIRMATION MODAL HANDLERS ---
-    const closeConfirmationModal = () => {
-        setConfirmationModal(prev => ({ ...prev, isOpen: false }));
-    };
-
-    const openSaveConfirmation = (updatedUser: User) => {
+    const closeConfirmationModal = () => setConfirmationModal(prev => ({ ...prev, isOpen: false }));
+    const openSaveConfirmation = (updatedUser: Partial<User>, avatarFile?: File) => {
         setConfirmationModal({
             isOpen: true,
             title: 'تأكيد حفظ التغييرات',
             message: 'هل أنت متأكد أنك تريد حفظ المعلومات الجديدة؟',
             onConfirm: () => {
-                handleUpdateUser(updatedUser);
+                handleUpdateUser(updatedUser, avatarFile);
                 closeConfirmationModal();
             },
             confirmText: 'حفظ',
             confirmButtonClass: 'btn-primary'
         });
     };
-    
     const openDeleteConfirmation = (item: AdminEditableItem, section: AdminSection) => {
-        let itemName = '';
-        if ('name' in item) itemName = item.name;
-        if ('title' in item) itemName = item.title;
-        if (section === 'gallery') itemName = `صورة (${item.id})`;
-
+        let itemName = 'name' in item ? item.name : 'title' in item ? item.title : `عنصر ${item.id}`;
         setConfirmationModal({
             isOpen: true,
             title: `تأكيد حذف`,
@@ -676,62 +878,129 @@ const App = () => {
             confirmButtonClass: 'btn-danger'
         });
     };
-    
     const openLogoutConfirmation = () => {
-        setConfirmationModal({
-            isOpen: true,
-            title: 'تأكيد تسجيل الخروج',
-            message: 'هل أنت متأكد أنك تريد تسجيل الخروج؟',
-            onConfirm: handleLogout,
-            confirmText: 'تسجيل الخروج',
-            confirmButtonClass: 'btn-danger'
-        });
+        setConfirmationModal({ isOpen: true, title: 'تأكيد تسجيل الخروج', message: 'هل أنت متأكد أنك تريد تسجيل الخروج؟', onConfirm: handleLogout, confirmText: 'تسجيل الخروج', confirmButtonClass: 'btn-danger' });
     };
 
     // --- ADMIN CRUD HANDLERS ---
-    const handleOpenAdminModal = (mode: AdminModalMode, section: AdminSection, item: AdminEditableItem | null = null) => {
-        setAdminModalState({ isOpen: true, mode, section, item });
+    const handleOpenAdminModal = (mode: AdminModalMode, section: AdminSection, item: AdminEditableItem | null = null) => setAdminModalState({ isOpen: true, mode, section, item });
+    const handleCloseAdminModal = () => setAdminModalState({ isOpen: false, mode: 'add', section: null, item: null });
+
+    const handleSaveAdminItem = async (itemData: any, section: AdminSection) => {
+      setIsLoading(true);
+      const { filesToUpload, ...formData } = itemData;
+      
+      try {
+          // Handle file uploads first
+          if (filesToUpload) {
+              if (filesToUpload.image_url instanceof File) {
+                  const url = await uploadFile(section, filesToUpload.image_url);
+                  if (url) formData.image_url = url;
+              }
+              if (Array.isArray(filesToUpload.image_urls)) {
+                  const urls = await Promise.all(filesToUpload.image_urls.map((file: File) => uploadFile(section, file)));
+                  formData.image_urls = urls.filter(Boolean);
+              }
+              if (filesToUpload.download_url instanceof File) {
+                  const url = await uploadFile('book-files', filesToUpload.download_url);
+                  if (url) formData.download_url = url;
+              }
+          }
+  
+          let error;
+          if (adminModalState.mode === 'add') {
+              ({ error } = await supabase.from(section).insert(formData));
+          } else {
+              ({ error } = await supabase.from(section).update(formData).eq('id', formData.id));
+          }
+          
+          if (error) throw error;
+  
+          showToast(`تم ${adminModalState.mode === 'add' ? 'إضافة' : 'تحديث'} العنصر بنجاح!`, 'success');
+          handleCloseAdminModal();
+          if(user) await fetchAllData(user);
+      } catch (err) {
+          showToast(`فشل حفظ العنصر: ${getErrorMessage(err)}`, 'error');
+      } finally {
+        setIsLoading(false);
+      }
     };
-
-    const handleCloseAdminModal = () => {
-        setAdminModalState({ isOpen: false, mode: 'add', section: null, item: null });
-    };
-
-    const handleSaveAdminItem = (item: AdminEditableItem, section: AdminSection) => {
-        const mode = adminModalState.mode;
-        const itemType = section.slice(0, -1); // 'teachers' -> 'teacher'
-
-        if (mode === 'add') {
-            const newItem = { ...item, id: Date.now() }; // Use timestamp for unique ID in demo
-            switch(section) {
-                case 'teachers': setTeachers(prev => [newItem as Teacher, ...prev]); break;
-                case 'trips': setTrips(prev => [newItem as TripInfo, ...prev]); break;
-                case 'gallery': setGallery(prev => [newItem as GalleryImage, ...prev]); break;
-                // Add other cases here
+    
+    const handleDeleteItem = async (item: AdminEditableItem, section: AdminSection) => {
+        setIsLoading(true);
+        try {
+            // First, delete the database record
+            const { error } = await supabase.from(section).delete().eq('id', item.id);
+            if (error) throw error;
+    
+            // Next, collect all associated file URLs to delete from storage
+            const urlsToDelete = new Set<string>();
+            if ('image_url' in item && item.image_url) urlsToDelete.add(item.image_url);
+            if ('download_url' in item && item.download_url) urlsToDelete.add(item.download_url);
+            if ('image_urls' in item && Array.isArray(item.image_urls)) {
+                item.image_urls.forEach(url => url && urlsToDelete.add(url));
             }
-             showToast(`تمت إضافة ${itemType} جديد بنجاح!`, 'success');
-        } else { // 'edit'
-            switch(section) {
-                case 'teachers': setTeachers(prev => prev.map(t => t.id === item.id ? item as Teacher : t)); break;
-                case 'trips': setTrips(prev => prev.map(t => t.id === item.id ? item as TripInfo : t)); break;
-                case 'gallery': setGallery(prev => prev.map(g => g.id === item.id ? item as GalleryImage : g)); break;
-                // Add other cases here
+    
+            if (urlsToDelete.size > 0) {
+                const filesByBucket: Record<string, string[]> = {};
+    
+                const getBucketAndPath = (url: string): { bucket: string, path: string } | null => {
+                    try {
+                        const pathParts = new URL(url).pathname.split('/');
+                        // Standard Supabase URL path: /storage/v1/object/public/BUCKET_NAME/FILE_PATH
+                        const publicIndex = pathParts.indexOf('public');
+                        if (publicIndex > -1 && publicIndex + 1 < pathParts.length) {
+                            const bucket = pathParts[publicIndex + 1];
+                            const path = pathParts.slice(publicIndex + 2).join('/');
+                            return { bucket, path };
+                        }
+                    } catch (e) {
+                        console.error("Could not parse file URL:", url, e);
+                    }
+                    return null;
+                };
+    
+                for (const url of urlsToDelete) {
+                    const fileInfo = getBucketAndPath(url);
+                    if (fileInfo && fileInfo.path) {
+                        if (!filesByBucket[fileInfo.bucket]) {
+                            filesByBucket[fileInfo.bucket] = [];
+                        }
+                        filesByBucket[fileInfo.bucket].push(fileInfo.path);
+                    }
+                }
+    
+                // Perform batch deletions for each bucket
+                for (const bucket in filesByBucket) {
+                    if (filesByBucket[bucket].length > 0) {
+                        const { error: storageError } = await supabase.storage.from(bucket).remove(filesByBucket[bucket]);
+                        if (storageError) {
+                            // Log error but don't throw, as the DB record was deleted.
+                            console.error(`Failed to delete files from bucket ${bucket}:`, storageError);
+                            showToast(`تم حذف العنصر ولكن فشل حذف بعض الملفات المرتبطة.`, 'info');
+                        }
+                    }
+                }
             }
-             showToast(`تم تحديث بيانات الـ ${itemType} بنجاح!`, 'success');
+    
+            showToast('تم الحذف بنجاح.', 'success');
+            if(user) await fetchAllData(user);
+        } catch (err) {
+            showToast(`فشل الحذف: ${getErrorMessage(err)}`, 'error');
+        } finally {
+            setIsLoading(false);
         }
-        handleCloseAdminModal();
     };
-
-    const handleDeleteItem = (item: AdminEditableItem, section: AdminSection) => {
-        switch(section) {
-            case 'teachers': setTeachers(prev => prev.filter(t => t.id !== item.id)); break;
-            case 'trips': setTrips(prev => prev.filter(t => t.id !== item.id)); break;
-            case 'gallery': setGallery(prev => prev.filter(g => g.id !== item.id)); break;
-            // Add other cases
-        }
-        showToast('تم الحذف بنجاح.', 'success');
+    
+    // --- NOTIFICATION HANDLERS ---
+    const handleMarkOneAsRead = async (id: number) => {
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+        await supabase.from('notifications').update({ read: true }).eq('id', id);
     };
-
+    const handleMarkAllAsRead = async () => {
+        setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+        if(user) await supabase.from('notifications').update({ read: true }).eq('user_id', user.id).eq('read', false);
+    };
 
     const handleSendChatMessage = async (message: string) => {
         setChatMessages(prev => [...prev, { sender: 'user', text: message }]);
@@ -758,7 +1027,7 @@ Example 2:
 User: أين الأستاذ أحمد؟
 Your response: 🔍 الأستاذ أحمد متواجد في قاعة الإعدادي بالدور الثاني. هل تحتاج مساعدة أخرى؟ 😊
 
-Example encouragements to add at the end of responses:
+Example encouragements to add at the end of a response:
 - "إجابة رائعة! استمر على هذا المنوال! 💙🔥"
 - "أحسنت يا بطل! 👏✨"
 - "لا تقلق من الخطأ، فالتعلم رحلة يا صديقي 🚀📚"`;
@@ -781,7 +1050,7 @@ Example encouragements to add at the end of responses:
     };
     
     // --- RENDER LOGIC ---
-    if (isLoading) {
+    if (isLoading && !user) { // Only show full screen loader on initial load
         return <div className="loading-screen"><div className="loading-spinner"></div></div>;
     }
 
@@ -812,8 +1081,9 @@ Example encouragements to add at the end of responses:
                                 <NotificationsPanel 
                                     isOpen={isNotificationsOpen} 
                                     onClose={() => setNotificationsOpen(false)} 
-                                    notifications={notifications} 
-                                    setNotifications={setNotifications}
+                                    notifications={notifications}
+                                    onMarkAllRead={handleMarkAllAsRead}
+                                    onMarkOneRead={handleMarkOneAsRead}
                                 />
                             </div>
                         </header>
@@ -823,7 +1093,7 @@ Example encouragements to add at the end of responses:
                                 &times;
                             </button>
                             <div className="sidebar-profile-card" onClick={() => navigate('profile')}>
-                                <InitialAvatar name={user?.full_name || ''} className="profile-card-avatar-large" />
+                                <InitialAvatar name={user?.full_name || ''} avatarUrl={user?.avatar_url} className="profile-card-avatar-large" />
                                 <h3>{user?.full_name}</h3>
                                 <p>{user?.role === 'student' ? user.student_id : (user?.role === 'admin' ? 'المدير العام ✨' : 'المشرف 🔥')}</p>
                             </div>
@@ -882,6 +1152,7 @@ Example encouragements to add at the end of responses:
                     </>
                 )}
                 <main className="main-content" style={!user ? {paddingTop: '2rem'} : {}}>
+                    {isLoading && <div className="loading-screen" style={{position: 'absolute', zIndex: 5000}}><div className="loading-spinner"></div></div>}
                     <div className="content-area">
                         {children}
                     </div>
@@ -931,11 +1202,10 @@ Example encouragements to add at the end of responses:
     );
     
     const DashboardPage = () => {
-        const todayClasses = useMemo(() => classes.filter(c => c.date === todayISO).sort((a,b) => a.time.localeCompare(b.time)), [classes]);
         return (
             <div className="dashboard-page">
                 <div className="page-container">
-                    <DailyClassTicker classes={todayClasses} onClassClick={handleClassClick} />
+                    <DailyClassTicker classes={classes} onClassClick={handleClassClick} />
                     <Announcements posts={posts} />
                     <WeeklyScheduleGrid classes={classes} onClassClick={handleClassClick} />
                     <GalleryPreview images={gallery} />
@@ -945,8 +1215,162 @@ Example encouragements to add at the end of responses:
     };
 
     const AdminPage = () => {
+        const [studentSearchId, setStudentSearchId] = useState('');
+        const [foundStudent, setFoundStudent] = useState<User | null>(null);
+        const [studentBookings, setStudentBookings] = useState<Booking[]>([]);
+        const [searchError, setSearchError] = useState('');
+
+        const handleStudentSearch = async (e: React.FormEvent) => {
+            e.preventDefault();
+            setFoundStudent(null);
+            setStudentBookings([]);
+            setSearchError('');
+            if (!studentSearchId.trim()) {
+                setSearchError('الرجاء إدخال كود الطالب للبحث.');
+                return;
+            }
+            const { data: student, error } = await supabase.from('profiles').select('*').eq('student_id', studentSearchId.trim().toUpperCase()).maybeSingle();
+            if (error) {
+                setSearchError(`حدث خطأ: ${error.message}`);
+                return;
+            }
+
+            if (student) {
+                setFoundStudent(student);
+                const { data: bookingsForStudent, error: bookingError } = await supabase.from('bookings_details').select('*').eq('student_id', student.id).order('item_date', { ascending: false });
+                if (bookingError) {
+                   setSearchError(`خطأ في جلب حجوزات الطالب: ${bookingError.message}`);
+                } else if (bookingsForStudent) {
+                    setStudentBookings(bookingsForStudent as any);
+                }
+            } else {
+                setSearchError('لم يتم العثور على طالب بهذا الكود.');
+            }
+        };
+
         const renderAdminContent = () => {
             switch(adminSection) {
+                case 'students':
+                    return <div className="admin-section-content">
+                        <form className="admin-search-form" onSubmit={handleStudentSearch}>
+                            <input
+                                type="text"
+                                placeholder="أدخل كود الطالب هنا..."
+                                value={studentSearchId}
+                                onChange={(e) => setStudentSearchId(e.target.value)}
+                            />
+                            <button type="submit" className="btn btn-primary">بحث</button>
+                        </form>
+                        {searchError && <p className="auth-error" style={{textAlign: 'center'}}>{searchError}</p>}
+                        {foundStudent && (
+                            <div className="student-search-results">
+                                <div className="content-card student-details-card">
+                                    <h3 className="form-section-title">بيانات الطالب</h3>
+                                    <p><strong>الاسم:</strong> {foundStudent.full_name}</p>
+                                    <p><strong>الكود:</strong> {foundStudent.student_id}</p>
+                                    <p><strong>الهاتف:</strong> {foundStudent.phone}</p>
+                                    <p><strong>هاتف ولي الأمر:</strong> {foundStudent.guardian_phone}</p>
+                                    <p><strong>المدرسة:</strong> {foundStudent.school}</p>
+                                    <p><strong>الصف:</strong> {foundStudent.grade}</p>
+                                </div>
+                                <div className="student-bookings-section">
+                                    <h3 className="form-section-title">الحجوزات الخاصة بالطالب ({studentBookings.length})</h3>
+                                    {studentBookings.length > 0 ? (
+                                        <div className="student-bookings-list">
+                                            {studentBookings.map(booking => (
+                                                <div key={booking.id} className="booking-card">
+                                                    <div className="booking-card-header">
+                                                        <span className={`booking-type-badge ${booking.type}`}>{booking.type === 'class' ? 'حصة' : 'رحلة'}</span>
+                                                        <h4>{booking.item_name}</h4>
+                                                    </div>
+                                                    <p><strong>التاريخ:</strong> {formatDate(booking.item_date)}</p>
+                                                    <p><strong>الوقت:</strong> {formatTime(booking.item_time)}</p>
+                                                    <p><strong>المكان:</strong> {booking.item_location}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p>لا توجد حجوزات حالية لهذا الطالب.</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>;
+                case 'classes':
+                     return <div className="admin-section-content">
+                        <div className="admin-section-header">
+                            <h3>قائمة الحصص ({classes.length})</h3>
+                            <button className="btn btn-primary admin-add-btn" onClick={() => handleOpenAdminModal('add', 'classes')}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                إضافة حصة
+                            </button>
+                        </div>
+                         <div className="admin-items-grid classes-grid">
+                            {[...classes].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.time.localeCompare(a.time)).map(c => (
+                                <div key={c.id} className="admin-item-card class-card">
+                                    {c.is_review && <div className="review-badge-admin">مراجعة</div>}
+                                    <div className="admin-item-info">
+                                        <h4>{c.name}</h4>
+                                        <p>{c.teacher} • {c.location}</p>
+                                        <small>{formatDate(c.date)} - {formatTime(c.time)}</small>
+                                    </div>
+                                    <div className="admin-item-controls">
+                                        <button onClick={() => handleOpenAdminModal('edit', 'classes', c)} title="تعديل">✏️</button>
+                                        <button onClick={() => openDeleteConfirmation(c, 'classes')} title="حذف">🗑️</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                     </div>;
+                case 'posts':
+                    return <div className="admin-section-content">
+                        <div className="admin-section-header">
+                            <h3>إدارة المنشورات ({posts.length})</h3>
+                            <button className="btn btn-primary admin-add-btn" onClick={() => handleOpenAdminModal('add', 'posts')}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                إضافة منشور
+                            </button>
+                        </div>
+                        <div className="admin-items-grid posts-grid">
+                            {posts.map(post => (
+                                <div key={post.id} className="admin-item-card">
+                                    {post.image_url && <img src={post.image_url} alt={post.title} className="admin-item-image"/>}
+                                    <div className="admin-item-info">
+                                        <h4>{post.title}</h4>
+                                        <p>{post.content.substring(0, 100)}...</p>
+                                        <small>{formatDate(post.created_at)}</small>
+                                    </div>
+                                    <div className="admin-item-controls">
+                                        <button onClick={() => handleOpenAdminModal('edit', 'posts', post)} title="تعديل">✏️</button>
+                                        <button onClick={() => openDeleteConfirmation(post, 'posts')} title="حذف">🗑️</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>;
+                case 'bookings':
+                    return <div className="admin-section-content">
+                        <div className="admin-section-header">
+                            <h3>الحجوزات الحالية ({bookings.length})</h3>
+                        </div>
+                        <div className="bookings-table-container">
+                        <table className="bookings-table">
+                            <thead>
+                                <tr><th>اسم الطالب</th><th>نوع الحجز</th><th>اسم الحصة/الرحلة</th><th>التاريخ</th></tr>
+                            </thead>
+                            <tbody>
+                                {bookings.map(b => (
+                                    <tr key={b.id}>
+                                        <td>{b.profiles?.full_name} ({b.profiles?.student_id})</td>
+                                        <td><span className={`booking-type-badge ${b.type}`}>{b.type === 'class' ? 'حصة' : 'رحلة'}</span></td>
+                                        <td>{b.item_name}</td>
+                                        <td>{formatDate(b.item_date)} {formatTime(b.item_time)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                     </div>
+                    </div>;
                 case 'teachers':
                     return <div className="admin-section-content">
                         <div className="admin-section-header">
@@ -985,7 +1409,7 @@ Example encouragements to add at the end of responses:
                         <div className="admin-items-grid trips-grid">
                              {trips.map(trip => (
                                 <div key={trip.id} className="admin-item-card trip-card">
-                                    <img src={trip.image_urls[0]} alt={trip.name} className="admin-item-image"/>
+                                    <img src={trip.image_urls?.[0]} alt={trip.name} className="admin-item-image"/>
                                     <div className="admin-item-info">
                                         <h4>{trip.name}</h4>
                                         <p>{trip.place} - {formatDate(trip.date)}</p>
@@ -1026,6 +1450,31 @@ Example encouragements to add at the end of responses:
                             ))}
                         </div>
                     </div>;
+                case 'books':
+                    return <div className="admin-section-content">
+                        <div className="admin-section-header">
+                            <h3>قائمة الكتب والمذكرات ({books.length})</h3>
+                            <button className="btn btn-primary admin-add-btn" onClick={() => handleOpenAdminModal('add', 'books')}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path></svg>
+                                إضافة كتاب
+                            </button>
+                        </div>
+                        <div className="admin-items-grid books-grid">
+                            {books.map(book => (
+                                <div key={book.id} className="admin-item-card book-card">
+                                    <img src={book.image_url} alt={book.title} className="admin-item-image"/>
+                                    <div className="admin-item-info">
+                                        <h4>{book.title}</h4>
+                                        <p>{book.description.substring(0, 80)}...</p>
+                                    </div>
+                                    <div className="admin-item-controls">
+                                        <button onClick={() => handleOpenAdminModal('edit', 'books', book)} title="تعديل">✏️</button>
+                                        <button onClick={() => openDeleteConfirmation(book, 'books')} title="حذف">🗑️</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>;
                 default:
                     return <div style={{padding: '2rem', textAlign: 'center'}}>محتوى قسم "{adminSection}" تحت الإنشاء.</div>
             }
@@ -1039,11 +1488,16 @@ Example encouragements to add at the end of responses:
                         لوحة التحكم
                     </h2>
                     <div className="admin-tabs">
-                        {(['teachers', 'trips', 'gallery', 'classes', 'posts', 'students', 'bookings'] as AdminSection[]).map(s => {
+                        {(['students', 'classes', 'teachers', 'trips', 'books', 'gallery', 'bookings', 'posts'] as AdminSection[]).map(s => {
                              if(s === 'bookings' && user?.role !== 'supervisor' && user?.role !== 'admin') return null;
                              const labels: Record<AdminSection, string> = {
-                                 teachers: 'ادارة المدرسين', trips: 'ادارة الرحلات', gallery: 'ادارة الصور',
-                                 classes: 'ادارة الحصص', posts: 'ادارة المنشورات', students: 'بحث عن طالب',
+                                 students: 'بحث عن طالب',
+                                 classes: 'ادارة الحصص',
+                                 teachers: 'ادارة المدرسين', 
+                                 trips: 'ادارة الرحلات', 
+                                 books: 'ادارة الكتب',
+                                 gallery: 'ادارة الصور',
+                                 posts: 'ادارة المنشورات', 
                                  bookings: 'الحجوزات الحالية'
                              };
                              return (
@@ -1071,16 +1525,16 @@ Example encouragements to add at the end of responses:
         }, [bookings]);
 
         const studentBookingStats = useMemo(() => {
-            const studentMap = new Map<string, {name: string, classCount: number, tripCount: number, lastBooking: string}>();
+            const studentMap = new Map<string, {name: string, id: string, student_code: string, classCount: number, tripCount: number, lastBooking: string}>();
             bookings.forEach(booking => {
                 if(!studentMap.has(booking.student_id)){
-                    studentMap.set(booking.student_id, { name: booking.student_name, classCount: 0, tripCount: 0, lastBooking: booking.item_date });
+                    studentMap.set(booking.student_id, { name: booking.profiles.full_name, id: booking.student_id, student_code: booking.profiles.student_id, classCount: 0, tripCount: 0, lastBooking: booking.item_date });
                 }
                 const studentData = studentMap.get(booking.student_id)!;
                 if(booking.type === 'class') studentData.classCount++; else studentData.tripCount++;
                 if(new Date(booking.item_date) > new Date(studentData.lastBooking)) studentData.lastBooking = booking.item_date;
             });
-            return Array.from(studentMap.entries()).map(([id, data]) => ({id, ...data}));
+            return Array.from(studentMap.values());
         }, [bookings]);
 
         return (
@@ -1096,11 +1550,11 @@ Example encouragements to add at the end of responses:
                      <div className="bookings-table-container" style={{marginTop: '2rem'}}>
                         <table className="bookings-table">
                             <thead>
-                                <tr><th>ID الطالب</th><th>اسم الطالب</th><th>حصص محجوزة</th><th>رحلات محجوزة</th><th>آخر حجز</th></tr>
+                                <tr><th>كود الطالب</th><th>اسم الطالب</th><th>حصص محجوزة</th><th>رحلات محجوزة</th><th>آخر حجز</th></tr>
                             </thead>
                             <tbody>
                                 {studentBookingStats.map(s => (
-                                    <tr key={s.id}><td>{s.id}</td><td>{s.name}</td><td>{s.classCount}</td><td>{s.tripCount}</td><td>{formatDate(s.lastBooking)}</td></tr>
+                                    <tr key={s.id}><td>{s.student_code}</td><td>{s.name}</td><td>{s.classCount}</td><td>{s.tripCount}</td><td>{formatDate(s.lastBooking)}</td></tr>
                                 ))}
                             </tbody>
                         </table>
@@ -1114,7 +1568,7 @@ Example encouragements to add at the end of responses:
         const [authPage, setAuthPage] = useState<AuthPage>('login');
         const [form, setForm] = useState({
             email: '', password: '', confirmPassword: '', full_name: '',
-            phone: '', guardian_phone: '', school: '', grade: 'الصف الأول الإعدادي',
+            phone: '', guardian_phone: '', school: '', grade: 'الصف الأول الثانوي',
         });
         const [loading, setLoading] = useState(false);
         const [error, setError] = useState('');
@@ -1126,55 +1580,83 @@ Example encouragements to add at the end of responses:
         const handleSwitchAuthPage = (page: AuthPage) => {
             setAuthPage(page);
             setError('');
-            setForm({ // Reset form on switch
+            setForm({
                 email: '', password: '', confirmPassword: '', full_name: '',
-                phone: '', guardian_phone: '', school: '', grade: 'الصف الأول الإعدادي',
+                phone: '', guardian_phone: '', school: '', grade: 'الصف الأول الثانوي',
             });
         };
       
-        const handleLoginSubmit = (e: React.FormEvent) => {
+        const handleLoginSubmit = async (e: React.FormEvent) => {
             e.preventDefault();
             setLoading(true);
             setError('');
-            setTimeout(() => {
-                if (form.email.toLowerCase() === 'admin@google.com' || form.email.toLowerCase() === 'admin') {
-                    handleLogin(placeholderAdmin);
-                } else if (form.email.toLowerCase() === 'supervisor@google.com') {
-                    handleLogin(placeholderSupervisor);
-                } else if (form.email || form.password) {
-                    handleLogin(placeholderStudent);
-                } else {
+        
+            const { error } = await supabase.auth.signInWithPassword({
+                email: form.email,
+                password: form.password,
+            });
+        
+            setLoading(false);
+            if (error) {
+                if (error.message === 'Email not confirmed') {
+                    setError('البريد الإلكتروني لم يتم تفعيله. يرجى التحقق من بريدك لتفعيل الحساب.');
+                } else if (error.message.includes('Invalid login credentials')) {
                     setError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
-                    setLoading(false);
+                } else {
+                    setError(getErrorMessage(error));
                 }
-            }, 1000);
+            }
+            // onAuthStateChange will handle navigation on success
         };
 
-        const handleRegisterSubmit = (e: React.FormEvent) => {
+        const handleRegisterSubmit = async (e: React.FormEvent) => {
             e.preventDefault();
             setError('');
-
+        
             if (form.password !== form.confirmPassword) {
                 setError('كلمتا المرور غير متطابقتين.');
                 return;
             }
-
+        
             const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)[\S]{8,}$/;
             if (!passwordRegex.test(form.password)) {
                 setError('يجب أن تتكون كلمة المرور من 8 أحرف على الأقل وتحتوي على أرقام وحروف.');
                 return;
             }
-
+        
             setLoading(true);
-            setTimeout(() => {
-                console.log("Simulating user registration:", form);
-                setLoading(false);
+            const { data, error } = await supabase.auth.signUp({
+                email: form.email,
+                password: form.password,
+                options: {
+                    data: {
+                        full_name: form.full_name,
+                        phone: form.phone,
+                        guardian_phone: form.guardian_phone,
+                        school: form.school,
+                        grade: form.grade,
+                    },
+                    emailRedirectTo: window.location.origin
+                }
+            });
+        
+            setLoading(false);
+            if (error) {
+                if(error.message.includes("unique constraint")) {
+                    setError("هذا البريد الإلكتروني مسجل بالفعل.");
+                } else {
+                    setError(getErrorMessage(error));
+                }
+            } else if (data.user && !data.session) {
                 showToast('تم تسجيل حسابك! لقد أرسلنا رابط تحقق إلى بريدك الإلكتروني.', 'success');
                 handleSwitchAuthPage('login');
-            }, 1500);
+            } else if (data.user && data.session) {
+                // This happens if auto-confirm is on.
+                showToast('تم تسجيل حسابك بنجاح!', 'success');
+            }
         };
     
-        const handleForgotSubmit = (e: React.FormEvent) => {
+        const handleForgotSubmit = async (e: React.FormEvent) => {
             e.preventDefault();
             if (!form.email) {
                 setError('الرجاء إدخال البريد الإلكتروني.');
@@ -1182,11 +1664,17 @@ Example encouragements to add at the end of responses:
             }
             setLoading(true);
             setError('');
-            setTimeout(() => {
-                setLoading(false);
+            const { error } = await supabase.auth.resetPasswordForEmail(form.email, {
+                redirectTo: `${window.location.origin}`,
+            });
+        
+            setLoading(false);
+            if (error) {
+                setError(getErrorMessage(error));
+            } else {
                 showToast(`تم إرسال رابط استعادة كلمة المرور إلى ${form.email}.`, 'info');
                 handleSwitchAuthPage('login');
-            }, 1500);
+            }
         };
 
         const renderContent = () => {
@@ -1278,7 +1766,7 @@ Example encouragements to add at the end of responses:
                                 {error && <p className="auth-error">{error}</p>}
                                 <div className="input-group">
                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="input-icon"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                                   <input type="text" name="email" placeholder="البريد الإلكتروني أو كود الطالب" required onChange={handleInputChange} value={form.email} />
+                                   <input type="email" name="email" placeholder="البريد الإلكتروني" required onChange={handleInputChange} value={form.email} />
                                 </div>
                                 <div className="input-group">
                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="input-icon"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
@@ -1292,11 +1780,6 @@ Example encouragements to add at the end of responses:
                             <p className="auth-link-separator">
                                 ليس لديك حساب؟ <a onClick={() => handleSwitchAuthPage('register')}>سجل الآن</a>
                             </p>
-                            
-                            <div className="demo-buttons">
-                                <button className="demo-btn" onClick={() => handleLogin(placeholderStudent)}>الدخول كطالب تجريبي</button>
-                                <button className="demo-btn" onClick={() => handleLogin(placeholderAdmin)}>الدخول كمدير</button>
-                            </div>
                         </>
                     );
             }
@@ -1311,7 +1794,8 @@ Example encouragements to add at the end of responses:
                         <p>بوابتك نحو التفوق الدراسي</p>
                     </header>
                     <div className="auth-card">
-                        {renderContent()}
+                        {loading && <div className="loading-spinner" style={{margin: '2rem auto'}}></div>}
+                        {!loading && renderContent()}
                     </div>
                      <footer className="auth-footer">
                         <a onClick={() => navigate('about')}>من نحن</a>
@@ -1325,7 +1809,14 @@ Example encouragements to add at the end of responses:
     
     const ProfilePage = () => {
         const [isEditing, setIsEditing] = useState(false);
-        const [profileForm, setProfileForm] = useState(user);
+        const [profileForm, setProfileForm] = useState<User | null>(user);
+        const [avatarFile, setAvatarFile] = useState<File | undefined>();
+        const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar_url || null);
+
+        useEffect(() => {
+            setProfileForm(user);
+            setAvatarPreview(user?.avatar_url || null);
+        }, [user]);
 
         if (!profileForm) return null;
 
@@ -1333,45 +1824,59 @@ Example encouragements to add at the end of responses:
             const { name, value } = e.target;
             setProfileForm(prev => prev ? { ...prev, [name]: value } : null);
         };
+        
+        const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+            if (e.target.files && e.target.files[0]) {
+                const file = e.target.files[0];
+                setAvatarFile(file);
+                setAvatarPreview(URL.createObjectURL(file));
+            }
+        };
 
         const handleSaveChanges = () => {
-            if (user) {
-                openSaveConfirmation(profileForm);
+            if (user && profileForm) {
+                const updatedData: Partial<User> = {};
+                let hasChanges = false;
+                if (profileForm.full_name !== user.full_name) { updatedData.full_name = profileForm.full_name; hasChanges = true; }
+                if (profileForm.phone !== user.phone) { updatedData.phone = profileForm.phone; hasChanges = true; }
+                if (profileForm.guardian_phone !== user.guardian_phone) { updatedData.guardian_phone = profileForm.guardian_phone; hasChanges = true; }
+                if (profileForm.school !== user.school) { updatedData.school = profileForm.school; hasChanges = true; }
+                
+                if(hasChanges || avatarFile) {
+                    openSaveConfirmation(updatedData, avatarFile);
+                }
                 setIsEditing(false);
             }
         };
 
         const handleCancel = () => {
             setProfileForm(user);
+            setAvatarPreview(user?.avatar_url || null);
+            setAvatarFile(undefined);
             setIsEditing(false);
         };
         
         const openProfileDeleteConfirmation = () => {
-            setConfirmationModal({
-                isOpen: true,
-                title: 'تأكيد حذف الحساب',
-                message: (
-                    <>
-                        <p style={{ fontWeight: 'bold', color: 'var(--error-color)' }}>
-                            تحذير! هذا الإجراء لا يمكن التراجع عنه.
-                        </p>
-                        <p>سيتم حذف جميع بياناتك نهائياً. هل أنت متأكد؟</p>
-                    </>
-                ),
-                onConfirm: () => {
-                    handleLogout(); // Simulate deletion by logging out
-                    alert('تم حذف الحساب بنجاح.');
-                },
-                confirmText: 'نعم، قم بالحذف',
-                confirmButtonClass: 'btn-danger'
-            });
+             // Deleting a user should be a secure, server-side operation.
+             // For now, we just log them out.
+            setConfirmationModal({ isOpen: true, title: 'تأكيد حذف الحساب', message: (<> <p style={{ fontWeight: 'bold', color: 'var(--error-color)' }}> تحذير! هذا الإجراء لا يمكن التراجع عنه. </p> <p>سيتم حذف جميع بياناتك نهائياً. هل أنت متأكد؟</p> </>), onConfirm: () => { handleLogout(); showToast('تم حذف الحساب بنجاح.', 'success'); }, confirmText: 'نعم، قم بالحذف', confirmButtonClass: 'btn-danger'});
         };
 
         return (
             <div className="page-container">
                 <div className="content-card profile-page-card">
                     <div className="profile-header-section">
-                        <InitialAvatar name={profileForm.full_name} className="profile-page-avatar" />
+                         <div style={{position: 'relative'}}>
+                            <InitialAvatar name={profileForm.full_name} avatarUrl={avatarPreview} className="profile-page-avatar" />
+                            {isEditing && (
+                                <label htmlFor="avatar-upload" style={{
+                                    position: 'absolute', bottom: 0, right: 0, background: 'var(--accent-color)', borderRadius: '50%', padding: '0.5rem', cursor: 'pointer', border: '2px solid var(--bg-secondary-color)'
+                                }}>
+                                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h.01"/><path d="M2 8.5A4.5 4.5 0 0 1 6.5 4h1.05a2.5 2.5 0 0 1 2.22 1.5L11 8.5M7 15l2.09-2.09a2 2 0 0 1 2.82 0L17 15m-4.5-4.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z"/><path d="M14.5 4H18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1.5"/></svg>
+                                   <input id="avatar-upload" type="file" accept="image/*" onChange={handleAvatarChange} style={{display: 'none'}} />
+                                </label>
+                            )}
+                        </div>
                         <div className="profile-header-info">
                             <h2>{profileForm.full_name}</h2>
                             <p>{profileForm.student_id}</p>
@@ -1388,7 +1893,7 @@ Example encouragements to add at the end of responses:
                             </div>
                             <div className="form-group">
                                 <label htmlFor="email">البريد الإلكتروني</label>
-                                <input type="email" id="email" name="email" value={profileForm.email} onChange={handleInputChange} disabled={!isEditing} />
+                                <input type="email" id="email" name="email" value={profileForm.email} onChange={handleInputChange} disabled />
                             </div>
                             <div className="form-group">
                                 <label htmlFor="phone">رقم الهاتف</label>
@@ -1431,62 +1936,172 @@ Example encouragements to add at the end of responses:
         );
     };
 
-    const TeachersPage = () => (
+    const TeachersPage = ({ teachers, onTeacherClick }: { teachers: Teacher[]; onTeacherClick: (teacher: Teacher) => void }) => (
         <div className="page-container">
             <div className="content-card">
                 <h2 className="content-section-title">
                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    <span>المدرسون</span>
+                    <span>كادر المدرسين</span>
                 </h2>
-                <div style={{textAlign: 'center', padding: '2rem'}}>هذه الصفحة قيد التطوير.</div>
+                <div className="teachers-public-grid">
+                    {teachers.map(teacher => (
+                        <div key={teacher.id} className="teacher-public-card" onClick={() => onTeacherClick(teacher)}>
+                            <img src={teacher.image_url} alt={teacher.name} className="teacher-public-image"/>
+                            <div className="teacher-public-info">
+                                <h4>{teacher.name}</h4>
+                                <p>{teacher.subject}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
             </div>
         </div>
     );
     
-    const GalleryPage = () => (
+    const GalleryPage = ({ images }: { images: GalleryImage[] }) => (
         <div className="page-container">
             <div className="content-card">
                  <h2 className="content-section-title">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-                    <span>الصور</span>
+                    <span>معرض الصور</span>
                 </h2>
-                 <div style={{textAlign: 'center', padding: '2rem'}}>هذه الصفحة قيد التطوير.</div>
+                 <div className="gallery-full-grid">
+                    {images.map(image => (
+                        <div key={image.id} className="gallery-full-item" onClick={() => alert(`عرض مكبر للصورة: ${image.description}`)}>
+                            <img src={image.image_url} alt={image.description} />
+                            <div className="gallery-full-item-overlay">
+                                <p>{image.description}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
             </div>
         </div>
     );
     
-    const TripsPage = () => (
+    const TripsPage = ({ trips }: { trips: TripInfo[] }) => (
         <div className="page-container">
             <div className="content-card">
                  <h2 className="content-section-title">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 19.88a2.89 2.89 0 0 0 4.1 0l1.42-1.42a2.89 2.89 0 0 0 0-4.1l-6.5-6.5a2.89 2.89 0 0 0-4.1 0l-1.42 1.42a2.89 2.89 0 0 0 0 4.1l6.5 6.5Z" /><path d="m11 12.5 2 2" /><path d="m15.5 7.5-2-2" /><path d="m19 12-7-7" /><path d="m5 12 7 7" /></svg>
-                    <span>الرحلات</span>
+                    <span>الرحلات والأنشطة</span>
                 </h2>
-                 <div style={{textAlign: 'center', padding: '2rem'}}>هذه الصفحة قيد التطوير.</div>
+                 <div className="trips-public-list">
+                    {trips.length > 0 ? trips.map(trip => (
+                        <div key={trip.id} className="trip-public-card">
+                            <div className="trip-public-image-container">
+                                {trip.image_urls && trip.image_urls.length > 0 ? (
+                                    <img src={trip.image_urls[0]} alt={trip.name} className="trip-public-image"/>
+                                ) : (
+                                    <div className="trip-public-image-placeholder">
+                                        <span>🚌</span>
+                                    </div>
+                                )}
+                                 <div className="trip-spots-badge">{trip.available_spots} مكان متاح</div>
+                            </div>
+                            <div className="trip-public-info">
+                                <h3>{trip.name}</h3>
+                                <div className="trip-public-details">
+                                   <span>📍 {trip.place}</span>
+                                   <span>🗓️ {formatDate(trip.date)}</span>
+                                   <span>🕒 {formatTime(trip.time)}</span>
+                                </div>
+                                <p className="trip-public-description">{trip.description}</p>
+                                <div className="trip-public-footer">
+                                    <div className="trip-price-badge">{trip.price} ج.م</div>
+                                    <button className="btn btn-primary" onClick={() => handleBooking(trip, 'trip')}>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                        <span>حجز مكان</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )) : (
+                        <p>لا توجد رحلات متاحة حالياً. تابعنا لمعرفة الجديد!</p>
+                    )}
+                 </div>
             </div>
         </div>
     );
     
-    const SchedulePage = () => (
-        <div className="page-container">
-            <div className="content-card">
-                 <h2 className="content-section-title">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                    <span>جدول الحصص</span>
-                </h2>
-                 <div style={{textAlign: 'center', padding: '2rem'}}>هذه الصفحة قيد التطوير.</div>
+    const SchedulePage = ({ classes }: { classes: ClassInfo[] }) => {
+        const groupedClasses = useMemo(() => {
+            const sorted = [...classes].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || a.time.localeCompare(b.time));
+            return sorted.reduce((acc, currentClass) => {
+                const dateKey = currentClass.date;
+                if (!acc[dateKey]) {
+                    acc[dateKey] = [];
+                }
+                acc[dateKey].push(currentClass);
+                return acc;
+            }, {} as Record<string, ClassInfo[]>);
+        }, [classes]);
+    
+        const sortedDateKeys = Object.keys(groupedClasses);
+    
+        return (
+            <div className="page-container">
+                <div className="content-card">
+                     <h2 className="content-section-title">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        <span>جدول الحصص الكامل</span>
+                    </h2>
+                     <div className="full-schedule-list">
+                        {sortedDateKeys.length > 0 ? sortedDateKeys.map(dateKey => (
+                            <div key={dateKey} className="schedule-day-group">
+                                <h3 className="schedule-day-header">{getDayName(dateKey)} - {formatDate(dateKey)}</h3>
+                                <div className="schedule-class-items">
+                                    {groupedClasses[dateKey].map(c => (
+                                        <div key={c.id} className="schedule-class-item" onClick={() => handleClassClick(c)}>
+                                            <div className="class-time">{formatTime(c.time)}</div>
+                                            <div className="class-details">
+                                                <h4>{c.name}</h4>
+                                                <p>{c.teacher} • {c.location}</p>
+                                            </div>
+                                            <div className="class-chevron">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )) : (
+                           <p>لا توجد حصص مجدولة حالياً.</p>
+                        )}
+                     </div>
+                </div>
             </div>
-        </div>
-    );
+        );
+    };
 
-    const BooksPage = () => (
+    const BooksPage = ({ books }: { books: BookInfo[] }) => (
         <div className="page-container">
             <div className="content-card">
                  <h2 className="content-section-title">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
                     <span>الكتب والمذكرات</span>
                 </h2>
-                 <div style={{textAlign: 'center', padding: '2rem'}}>هذه الصفحة قيد التطوير.</div>
+                 <div className="books-public-grid">
+                    {books.length > 0 ? books.map(book => (
+                        <div key={book.id} className="book-public-card">
+                            <div className="book-public-image-container">
+                                 <img src={book.image_url} alt={book.title} className="book-public-image"/>
+                            </div>
+                            <div className="book-public-info">
+                                <h3>{book.title}</h3>
+                                <p className="book-public-description">{book.description}</p>
+                                <div className="book-public-footer">
+                                    <a href={book.download_url} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                        <span>تحميل</span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    )) : (
+                        <p style={{ textAlign: 'center', padding: '2rem' }}>لا توجد كتب أو مذكرات متاحة حالياً.</p>
+                    )}
+                 </div>
             </div>
         </div>
     );
@@ -1582,7 +2197,7 @@ Example encouragements to add at the end of responses:
         };
 
         const handleFinishExam = async () => {
-            if (!ai) {
+            if (!ai || !user) {
                 showToast("خدمة التصحيح الذكي غير متاحة حالياً.", "error");
                 return;
             }
@@ -1633,6 +2248,20 @@ Example encouragements to add at the end of responses:
                 });
                 const evaluation = JSON.parse(response.text) as ExamResults;
                 setResults(evaluation);
+                
+                // Save results to Supabase
+                const { error: saveError } = await supabase.from('exam_results').insert({
+                    student_id: user.id,
+                    score: evaluation.score,
+                    feedback: evaluation.feedback,
+                    duration: duration,
+                    specialization: specialization
+                });
+                if (saveError) {
+                    console.error("Error saving exam results:", saveError);
+                    showToast('تم تصحيح اختبارك ولكن فشل حفظ النتيجة.', 'error');
+                }
+
             } catch (error) {
                 console.error("Error evaluating answers:", error);
                 showToast(`حدث خطأ أثناء تصحيح الاختبار: ${getErrorMessage(error)}`, 'error');
@@ -1970,11 +2599,11 @@ Example encouragements to add at the end of responses:
                 case 'profile': return <ProfilePage />;
                 case 'admin': return <AdminPage />;
                 case 'stats': return <StatsPage />;
-                case 'teachers': return <TeachersPage />;
-                case 'gallery': return <GalleryPage />;
-                case 'trips': return <TripsPage />;
-                case 'schedule': return <SchedulePage />;
-                case 'books': return <BooksPage />;
+                case 'teachers': return <TeachersPage teachers={teachers} onTeacherClick={handleTeacherClick} />;
+                case 'gallery': return <GalleryPage images={gallery} />;
+                case 'trips': return <TripsPage trips={trips} />;
+                case 'schedule': return <SchedulePage classes={classes} />;
+                case 'books': return <BooksPage books={books} />;
                 case 'exams': return <ExamsPage user={user} ai={ai} showToast={showToast}/>;
                 case 'about': return <AboutPage />;
                 case 'legal': return <LegalPage />;
@@ -1990,7 +2619,8 @@ Example encouragements to add at the end of responses:
         <>
             {renderPage()}
             {toast && <Toast key={toast.id} message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-            <ClassPopup isOpen={classPopup.isOpen} classInfo={classPopup.classInfo} onClose={() => setClassPopup({ isOpen: false, classInfo: null })} />
+            <ClassPopup isOpen={classPopup.isOpen} classInfo={classPopup.classInfo} onClose={() => setClassPopup({ isOpen: false, classInfo: null })} onBook={(item) => handleBooking(item, 'class')} />
+            <TeacherPopup isOpen={teacherPopup.isOpen} teacherInfo={teacherPopup.teacherInfo} onClose={() => setTeacherPopup({ isOpen: false, teacherInfo: null })} />
             {user && <ChatModal isOpen={isChatOpen} onClose={() => setChatOpen(false)} messages={chatMessages} onSend={handleSendChatMessage} isThinking={isAiThinking} />}
             <AdminModal state={adminModalState} onClose={handleCloseAdminModal} onSave={handleSaveAdminItem} />
             <ConfirmationModal
@@ -2014,53 +2644,80 @@ interface AdminModalProps {
 }
 const AdminModal: React.FC<AdminModalProps> = ({ state, onClose, onSave }) => {
     const [formData, setFormData] = useState<any>({});
+    const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+    const [filesToUpload, setFilesToUpload] = useState<Record<string, File | File[]>>({});
 
     useEffect(() => {
         if (state.isOpen) {
+            setFilesToUpload({}); // Reset files on open
             if (state.mode === 'edit' && state.item) {
                 setFormData(state.item);
-            } else {
-                // Set default form structure for 'add' mode
-                switch(state.section) {
-                    case 'teachers': setFormData({ name: '', subject: '', image_url: '', phone: '' }); break;
-                    case 'trips': setFormData({ name: '', place: '', date: '', time: '', price: 0, available_spots: 0, description: '', image_urls: Array(5).fill('') }); break;
-                    case 'gallery': setFormData({ image_url: '', description: '' }); break;
-                    default: setFormData({});
+                // Set initial previews for edit mode
+                if ('image_url' in state.item && state.item.image_url) {
+                    setImagePreviews([state.item.image_url]);
+                } else if ('image_urls' in state.item && state.item.image_urls) {
+                    setImagePreviews(state.item.image_urls);
+                } else {
+                    setImagePreviews([]);
                 }
+            } else {
+                // Reset for add mode
+                let initialFormState = {};
+                switch(state.section) {
+                    case 'teachers': initialFormState = { name: '', subject: '', image_url: '', phone: '' }; break;
+                    case 'trips': initialFormState = { name: '', place: '', date: '', time: '', price: 0, available_spots: 0, description: '', image_urls: [] }; break;
+                    case 'gallery': initialFormState = { image_url: '', description: '' }; break;
+                    case 'classes': initialFormState = { name: '', teacher: '', grade: 'الصف الثالث الثانوي', date: '', time: '', location: '', description: '', is_review: false, is_bookable: true }; break;
+                    case 'books': initialFormState = { title: '', description: '', image_url: '', download_url: '' }; break;
+                    case 'posts': initialFormState = { title: '', content: '', image_url: '' }; break;
+                    default: initialFormState = {};
+                }
+                setFormData(initialFormState);
+                setImagePreviews([]);
             }
         }
     }, [state]);
-
+    
     if (!state.isOpen || !state.section) return null;
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
         const { name, value, type } = e.target;
-        if (type === 'number') {
+         if (type === 'checkbox') {
+            setFormData({ ...formData, [name]: (e.target as HTMLInputElement).checked });
+        } else if (type === 'number') {
              setFormData({ ...formData, [name]: parseFloat(value) || 0 });
         } else {
             setFormData({ ...formData, [name]: value });
         }
     };
     
-    const handleImageUrlsChange = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
-        const newUrls = [...formData.image_urls];
-        newUrls[index] = e.target.value;
-        setFormData({...formData, image_urls: newUrls});
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files) return;
+        const { name, files, multiple } = e.target;
+
+        if (multiple) {
+            const fileList = Array.from(files);
+            const newImageUrls = fileList.map(file => URL.createObjectURL(file));
+            setImagePreviews(newImageUrls);
+            setFilesToUpload(prev => ({ ...prev, [name]: fileList }));
+        } else {
+            if (files.length > 0) {
+                 const file = files[0];
+                 const newImageUrl = URL.createObjectURL(file);
+                 setImagePreviews([newImageUrl]);
+                 setFilesToUpload(prev => ({...prev, [name]: file}));
+            }
+        }
     };
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        // Basic validation could be added here
-        if (state.section === 'trips') {
-            onSave({ ...formData, image_urls: formData.image_urls.filter((url:string) => url.trim() !== '') }, state.section);
-        } else {
-            onSave(formData, state.section);
-        }
+        onSave({ ...formData, filesToUpload }, state.section!);
     };
     
     const titles: Record<AdminSection, string> = {
          teachers: 'المدرس', trips: 'الرحلة', gallery: 'الصورة',
-         classes: 'الحصة', posts: 'المنشور', students: 'الطالب', bookings: 'الحجز'
+         classes: 'الحصة', posts: 'المنشور', students: 'الطالب', bookings: 'الحجز', books: 'الكتاب'
     };
     const title = `${state.mode === 'add' ? 'إضافة' : 'تعديل'} ${titles[state.section] || ''}`;
 
@@ -2070,9 +2727,45 @@ const AdminModal: React.FC<AdminModalProps> = ({ state, onClose, onSave }) => {
                 return <>
                     <div className="form-group"><label>اسم المدرس</label><input type="text" name="name" value={formData.name || ''} onChange={handleChange} required /></div>
                     <div className="form-group"><label>المادة</label><input type="text" name="subject" value={formData.subject || ''} onChange={handleChange} required /></div>
-                    <div className="form-group"><label>رابط الصورة</label><input type="url" name="image_url" value={formData.image_url || ''} onChange={handleChange} required /></div>
+                    <div className="form-group">
+                        <label>صورة المدرس</label>
+                        <input type="file" name="image_url" accept="image/*" onChange={handleFileChange} className="file-input" />
+                        {imagePreviews.length > 0 && (
+                            <div className="image-preview-container single-preview">
+                                <img src={imagePreviews[0]} alt="Preview" className="image-preview" />
+                            </div>
+                         )}
+                    </div>
                     <div className="form-group"><label>رقم الهاتف (اختياري)</label><input type="tel" name="phone" value={formData.phone || ''} onChange={handleChange} /></div>
-                </>
+                </>;
+            case 'classes':
+                return <>
+                    <div className="form-group"><label>اسم الحصة</label><input type="text" name="name" value={formData.name || ''} onChange={handleChange} required /></div>
+                    <div className="form-grid">
+                        <div className="form-group"><label>المدرس</label><input type="text" name="teacher" value={formData.teacher || ''} onChange={handleChange} required /></div>
+                        <div className="form-group"><label>القاعة/المكان</label><input type="text" name="location" value={formData.location || ''} onChange={handleChange} required /></div>
+                    </div>
+                     <div className="form-grid">
+                        <div className="form-group"><label>التاريخ</label><input type="date" name="date" value={formData.date || ''} onChange={handleChange} required /></div>
+                        <div className="form-group"><label>الوقت</label><input type="time" name="time" value={formData.time || ''} onChange={handleChange} required /></div>
+                    </div>
+                    <div className="form-group"><label>الصف الدراسي</label>
+                        <select name="grade" value={formData.grade || ''} onChange={handleChange} required>
+                            <option>الصف الأول الثانوي</option>
+                            <option>الصف الثاني الثانوي</option>
+                            <option>الصف الثالث الثانوي</option>
+                        </select>
+                    </div>
+                    <div className="form-group"><label>وصف الحصة</label><textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} /></div>
+                    <div className="form-group checkbox-group">
+                        <input type="checkbox" id="is_review" name="is_review" checked={!!formData.is_review} onChange={handleChange} />
+                        <label htmlFor="is_review">هذه حصة مراجعة</label>
+                    </div>
+                    <div className="form-group checkbox-group">
+                        <input type="checkbox" id="is_bookable" name="is_bookable" checked={!!formData.is_bookable} onChange={handleChange} />
+                        <label htmlFor="is_bookable">السماح للطلاب بالحجز</label>
+                    </div>
+                </>;
             case 'trips':
                 return <>
                     <div className="form-group"><label>اسم الرحلة</label><input type="text" name="name" value={formData.name || ''} onChange={handleChange} required /></div>
@@ -2080,15 +2773,58 @@ const AdminModal: React.FC<AdminModalProps> = ({ state, onClose, onSave }) => {
                     <div className="form-grid"><div className="form-group"><label>التاريخ</label><input type="date" name="date" value={formData.date || ''} onChange={handleChange} required /></div><div className="form-group"><label>الوقت</label><input type="time" name="time" value={formData.time || ''} onChange={handleChange} required /></div></div>
                     <div className="form-group"><label>الأماكن المتاحة</label><input type="number" name="available_spots" value={formData.available_spots || 0} onChange={handleChange} required /></div>
                     <div className="form-group"><label>الوصف</label><textarea name="description" value={formData.description || ''} onChange={handleChange} rows={4} required /></div>
-                    <div className="form-group"><label>روابط الصور (5 كحد أقصى)</label>
-                        { (formData.image_urls || []).map((url:string, i:number) => <input key={i} type="url" placeholder={`رابط الصورة ${i+1}${i===0 ? ' (رئيسية)' : ''}`} value={url} onChange={e => handleImageUrlsChange(e, i)} />) }
+                     <div className="form-group">
+                        <label>صور الرحلة (1-5 صور)</label>
+                        <input type="file" name="image_urls" multiple accept="image/*" onChange={handleFileChange} className="file-input" />
+                        {imagePreviews.length > 0 && (
+                            <div className="image-preview-container">
+                                {imagePreviews.map((url: string, i: number) => <img key={i} src={url} alt={`Preview ${i + 1}`} className="image-preview" />)}
+                            </div>
+                        )}
                     </div>
-                </>
+                </>;
             case 'gallery':
                 return <>
-                    <div className="form-group"><label>رابط الصورة</label><input type="url" name="image_url" value={formData.image_url || ''} onChange={handleChange} required /></div>
+                     <div className="form-group">
+                        <label>صورة للمعرض</label>
+                         <input type="file" name="image_url" accept="image/*" onChange={handleFileChange} className="file-input" />
+                         {imagePreviews.length > 0 && (
+                            <div className="image-preview-container single-preview">
+                                <img src={imagePreviews[0]} alt="Preview" className="image-preview" />
+                            </div>
+                         )}
+                    </div>
                     <div className="form-group"><label>وصف بسيط (سطر واحد)</label><input type="text" name="description" value={formData.description || ''} onChange={handleChange} required /></div>
-                </>
+                </>;
+            case 'books':
+                return <>
+                    <div className="form-group"><label>عنوان الكتاب/المذكرة</label><input type="text" name="title" value={formData.title || ''} onChange={handleChange} required /></div>
+                    <div className="form-group"><label>الوصف</label><textarea name="description" value={formData.description || ''} onChange={handleChange} rows={4} required /></div>
+                    <div className="form-group">
+                        <label>صورة الغلاف</label>
+                        <input type="file" name="image_url" accept="image/*" onChange={handleFileChange} className="file-input" />
+                        {imagePreviews.length > 0 && (
+                            <div className="image-preview-container single-preview">
+                                <img src={imagePreviews[0]} alt="Preview" className="image-preview" />
+                            </div>
+                         )}
+                    </div>
+                    <div className="form-group"><label>ملف الكتاب (PDF)</label><input type="file" name="download_url" accept=".pdf" onChange={handleFileChange} className="file-input" /></div>
+                </>;
+            case 'posts':
+                return <>
+                    <div className="form-group"><label>عنوان المنشور</label><input type="text" name="title" value={formData.title || ''} onChange={handleChange} required /></div>
+                    <div className="form-group"><label>محتوى المنشور</label><textarea name="content" value={formData.content || ''} onChange={handleChange} rows={5} required /></div>
+                    <div className="form-group">
+                        <label>صورة المنشور (اختياري)</label>
+                        <input type="file" name="image_url" accept="image/*" onChange={handleFileChange} className="file-input" />
+                        {imagePreviews.length > 0 && (
+                            <div className="image-preview-container single-preview">
+                                <img src={imagePreviews[0]} alt="Preview" className="image-preview" />
+                            </div>
+                         )}
+                    </div>
+                </>;
             default: return <p>لا يوجد نموذج متاح لهذا القسم.</p>
         }
     };
