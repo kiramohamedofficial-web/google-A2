@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>سنتر جوجل الذكي للصور</title>
+    <title>AI kira Generate</title>
     <link rel="stylesheet" href="index.css">
     <script type="importmap">
       {
@@ -16,7 +16,7 @@
 </head>
 <body>
     <header>
-        <h1>سنتر جوجل الذكي للصور</h1>
+        <h1>AI kira Generate</h1>
     </header>
 
     <main>
@@ -24,7 +24,12 @@
             <form id="image-form">
                 <div class="form-group">
                     <label for="prompt">صف الصورة</label>
-                    <textarea id="prompt" name="prompt" rows="4" placeholder="مثال: قطة ترتدي قبعة ساحر وتجلس على كومة من الكتب القديمة" required></textarea>
+                    <textarea id="prompt" name="prompt" rows="3" placeholder="مثال: قطة ترتدي قبعة ساحر وتجلس على كومة من الكتب القديمة" required></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="negative-prompt">عناصر غير مرغوب فيها (اختياري)</label>
+                    <textarea id="negative-prompt" name="negative-prompt" rows="2" placeholder="مثال: نص, تشوهات, جودة سيئة, أيدي قبيحة"></textarea>
                 </div>
 
                 <div class="grid-inputs">
@@ -61,6 +66,26 @@
                             <option value="young adult">شاب</option>
                             <option value="adult">بالغ</option>
                             <option value="elderly">كبير في السن</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="aspect-ratio">الأبعاد</label>
+                        <select id="aspect-ratio" name="aspect-ratio">
+                            <option value="1:1" selected>مربع (1:1)</option>
+                            <option value="16:9">عريض (16:9)</option>
+                            <option value="9:16">طولي (9:16)</option>
+                            <option value="4:3">أفقي (4:3)</option>
+                            <option value="3:4">عمودي (3:4)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="num-images">عدد الصور</label>
+                        <select id="num-images" name="num-images">
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                            <option value="4">4</option>
                         </select>
                     </div>
                 </div>
