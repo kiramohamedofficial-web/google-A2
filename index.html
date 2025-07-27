@@ -1,30 +1,85 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Google Center</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>سنتر جوجل الذكي للصور</title>
     <link rel="stylesheet" href="index.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script type="module" src="index.tsx"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.1.0/",
-    "react": "https://esm.sh/react@^19.1.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
-    "@google/genai": "https://esm.sh/@google/genai",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.52.1"
-  }
-}
-</script>
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@1.0.0"
+        }
+      }
+    </script>
 <link rel="stylesheet" href="/index.css">
 </head>
-  <body>
-    <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+<body>
+    <header>
+        <h1>سنتر جوجل الذكي للصور</h1>
+    </header>
+
+    <main>
+        <div class="form-container">
+            <form id="image-form">
+                <div class="form-group">
+                    <label for="prompt">صف الصورة</label>
+                    <textarea id="prompt" name="prompt" rows="4" placeholder="مثال: قطة ترتدي قبعة ساحر وتجلس على كومة من الكتب القديمة" required></textarea>
+                </div>
+
+                <div class="grid-inputs">
+                    <div class="form-group">
+                        <label for="style">ستايل الصورة</label>
+                        <select id="style" name="style">
+                            <option value="photorealistic" selected>واقعي</option>
+                            <option value="cinematic">سينمائي</option>
+                            <option value="anime">أنمي</option>
+                            <option value="fantasy art">فن خيالي</option>
+                            <option value="watercolor">ألوان مائية</option>
+                            <option value="3d-model">نموذج ثلاثي الأبعاد</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="gender">الجنس</label>
+                        <select id="gender" name="gender">
+                            <option value="any" selected>غير محدد</option>
+                            <option value="boy">ولد</option>
+                            <option value="girl">بنت</option>
+                            <option value="man">رجل</option>
+                            <option value="woman">امرأة</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="age">العمر</label>
+                        <select id="age" name="age">
+                            <option value="any" selected>غير محدد</option>
+                            <option value="toddler">طفل صغير</option>
+                            <option value="child">طفل</option>
+                            <option value="teenager">مراهق</option>
+                            <option value="young adult">شاب</option>
+                            <option value="adult">بالغ</option>
+                            <option value="elderly">كبير في السن</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" id="generate-btn">
+                    <span class="btn-text">إنشاء الصورة</span>
+                    <div class="spinner" style="display: none;"></div>
+                </button>
+            </form>
+        </div>
+
+        <div id="result-container">
+            <div id="image-gallery">
+                <p class="placeholder">سيتم عرض صورتك هنا. ابدأ بوصف ما تتخيله في الأعلى.</p>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="index.tsx"></script>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
