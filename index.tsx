@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GoogleGenerativeAI } from '@google/genai';
+import GoogleGenerativeAI from '@google/genai';
 
 const App: React.FC = () => {
   const [query, setQuery] = useState('');
